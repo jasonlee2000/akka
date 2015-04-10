@@ -19,15 +19,40 @@ import org.reactivestreams._
 
 import scala.concurrent.{ Await, ExecutionContextExecutor }
 
-object ActorFlowMaterializerImpl {
-  import OperationAttributes._
-  private[akka] def calcSettings(opAttr: OperationAttributes)(settings: ActorFlowMaterializerSettings): ActorFlowMaterializerSettings =
+/**
+ * INTERNAL API
+ */
+private[akka] object ActorFlowMaterializerImpl {
+
+  def calcSettings(opAttr: OperationAttributes)(settings: ActorFlowMaterializerSettings): ActorFlowMaterializerSettings = {
+    import OperationAttributes._
     opAttr.attributes.collect {
       case InputBuffer(initial, max) ⇒ (s: ActorFlowMaterializerSettings) ⇒ s.withInputBuffer(initial, max)
       case Dispatcher(dispatcher) ⇒ (s: ActorFlowMaterializerSettings) ⇒ s.withDispatcher(dispatcher)
       case SupervisionStrategy(decider) ⇒ (s: ActorFlowMaterializerSettings) ⇒
         s.withSupervisionStrategy(decider)
     }.reduceOption(_ andThen _).getOrElse((x: ActorFlowMaterializerSettings) ⇒ x)(settings) // FIXME is this the optimal way of encoding this?
+  }
+
+  /**
+   * Context parameter to the `create` methods of sources and sinks.
+   */
+  class CreateContext(
+    val effectiveAttributes: OperationAttributes,
+    val effectiveSettings: ActorFlowMaterializerSettings,
+    val stageName: String,
+    materializerImpl: ActorFlowMaterializerImpl) {
+
+    def materializer: ActorFlowMaterializer = materializerImpl
+
+    def actorOf(props: Props): ActorRef = {
+      val dispatcher =
+        if (props.dispatcher == Dispatchers.DefaultDispatcherId) effectiveSettings.dispatcher
+        else props.dispatcher
+      materializerImpl.actorOf(props, stageName, dispatcher)
+    }
+  }
+
 }
 
 /**
@@ -43,7 +68,7 @@ private[akka] case class ActorFlowMaterializerImpl(override val settings: ActorF
   import ActorFlowMaterializerImpl._
   import akka.stream.impl.Stages._
 
-  def withNamePrefix(name: String): FlowMaterializer = this.copy(namePrefix = name)
+  override def withNamePrefix(name: String): FlowMaterializer = this.copy(namePrefix = name)
 
   private[this] def nextFlowNameCount(): Long = flowNameCounter.incrementAndGet()
 
@@ -63,13 +88,16 @@ private[akka] case class ActorFlowMaterializerImpl(override val settings: ActorF
 
       override protected def materializeAtomic(atomic: Module, effectiveAttributes: OperationAttributes): Any = {
 
+        def newCreateContext() = new CreateContext(effectiveAttributes, calcSettings(effectiveAttributes)(settings),
+          stageName(effectiveAttributes), ActorFlowMaterializerImpl.this)
+
         atomic match {
           case sink: SinkModule[_, _] ⇒
-            val (sub, mat) = sink.create(ActorFlowMaterializerImpl.this, stageName(effectiveAttributes))
+            val (sub, mat) = sink.create(newCreateContext())
             assignPort(sink.shape.inlet, sub.asInstanceOf[Subscriber[Any]])
             mat
           case source: SourceModule[_, _] ⇒
-            val (pub, mat) = source.create(ActorFlowMaterializerImpl.this, stageName(effectiveAttributes))
+            val (pub, mat) = source.create(newCreateContext())
             assignPort(source.shape.outlet, pub.asInstanceOf[Publisher[Any]])
             mat
 
@@ -166,13 +194,10 @@ private[akka] case class ActorFlowMaterializerImpl(override val settings: ActorF
     session.materialize().asInstanceOf[Mat]
   }
 
-  lazy val executionContext: ExecutionContextExecutor = dispatchers.lookup(settings.dispatcher match {
+  override lazy val executionContext: ExecutionContextExecutor = dispatchers.lookup(settings.dispatcher match {
     case Deploy.NoDispatcherGiven ⇒ Dispatchers.DefaultDispatcherId
     case other                    ⇒ other
   })
-
-  private[akka] def actorOf(props: Props, name: String): ActorRef =
-    actorOf(props, name, settings.dispatcher)
 
   private[akka] def actorOf(props: Props, name: String, dispatcher: String): ActorRef = supervisor match {
     case ref: LocalActorRef ⇒

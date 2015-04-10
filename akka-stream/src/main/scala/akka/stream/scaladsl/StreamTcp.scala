@@ -22,6 +22,7 @@ import akka.io.Tcp
 import akka.stream._
 import akka.stream.impl._
 import akka.stream.impl.ReactiveStreamsCompliance._
+import akka.stream.impl.ActorFlowMaterializerImpl.CreateContext
 import akka.stream.scaladsl._
 import akka.util.ByteString
 import org.reactivestreams.{ Publisher, Processor, Subscriber, Subscription }
@@ -87,7 +88,7 @@ class StreamTcp(system: ExtendedActorSystem) extends akka.actor.Extension {
     val attributes: OperationAttributes,
     _shape: SourceShape[IncomingConnection]) extends SourceModule[IncomingConnection, Future[ServerBinding]](_shape) {
 
-    override def create(materializer: ActorFlowMaterializerImpl, flowName: String): (Publisher[IncomingConnection], Future[ServerBinding]) = {
+    override def create(context: CreateContext): (Publisher[IncomingConnection], Future[ServerBinding]) = {
       val localAddressPromise = Promise[InetSocketAddress]()
       val unbindPromise = Promise[() ⇒ Future[Unit]]()
       val publisher = new Publisher[IncomingConnection] {
