@@ -183,7 +183,7 @@ private[akka] case class ActorFlowMaterializerImpl(override val settings: ActorF
 
   override def actorOf(context: MaterializationContext, props: Props): ActorRef = {
     val dispatcher =
-      if (props.dispatcher == Dispatchers.DefaultDispatcherId) context.effectiveSettings.dispatcher
+      if (props.deploy.dispatcher == Deploy.NoDispatcherGiven) context.effectiveSettings.dispatcher
       else props.dispatcher
     actorOf(props, context.stageName, dispatcher)
   }
