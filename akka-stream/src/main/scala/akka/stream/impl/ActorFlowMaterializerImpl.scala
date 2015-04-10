@@ -34,25 +34,6 @@ private[akka] object ActorFlowMaterializerImpl {
     }.reduceOption(_ andThen _).getOrElse((x: ActorFlowMaterializerSettings) ⇒ x)(settings) // FIXME is this the optimal way of encoding this?
   }
 
-  /**
-   * Context parameter to the `create` methods of sources and sinks.
-   */
-  class CreateContext(
-    val effectiveAttributes: OperationAttributes,
-    val effectiveSettings: ActorFlowMaterializerSettings,
-    val stageName: String,
-    materializerImpl: ActorFlowMaterializerImpl) {
-
-    def materializer: ActorFlowMaterializer = materializerImpl
-
-    def actorOf(props: Props): ActorRef = {
-      val dispatcher =
-        if (props.dispatcher == Dispatchers.DefaultDispatcherId) effectiveSettings.dispatcher
-        else props.dispatcher
-      materializerImpl.actorOf(props, stageName, dispatcher)
-    }
-  }
-
 }
 
 /**
@@ -88,16 +69,17 @@ private[akka] case class ActorFlowMaterializerImpl(override val settings: ActorF
 
       override protected def materializeAtomic(atomic: Module, effectiveAttributes: OperationAttributes): Any = {
 
-        def newCreateContext() = new CreateContext(effectiveAttributes, calcSettings(effectiveAttributes)(settings),
-          stageName(effectiveAttributes), ActorFlowMaterializerImpl.this)
+        def newMaterializationContext() = new MaterializationContext(ActorFlowMaterializerImpl.this,
+          effectiveAttributes, calcSettings(effectiveAttributes)(settings),
+          stageName(effectiveAttributes))
 
         atomic match {
           case sink: SinkModule[_, _] ⇒
-            val (sub, mat) = sink.create(newCreateContext())
+            val (sub, mat) = sink.create(newMaterializationContext())
             assignPort(sink.shape.inlet, sub.asInstanceOf[Subscriber[Any]])
             mat
           case source: SourceModule[_, _] ⇒
-            val (pub, mat) = source.create(newCreateContext())
+            val (pub, mat) = source.create(newMaterializationContext())
             assignPort(source.shape.outlet, pub.asInstanceOf[Publisher[Any]])
             mat
 
@@ -198,6 +180,13 @@ private[akka] case class ActorFlowMaterializerImpl(override val settings: ActorF
     case Deploy.NoDispatcherGiven ⇒ Dispatchers.DefaultDispatcherId
     case other                    ⇒ other
   })
+
+  override def actorOf(context: MaterializationContext, props: Props): ActorRef = {
+    val dispatcher =
+      if (props.dispatcher == Dispatchers.DefaultDispatcherId) context.effectiveSettings.dispatcher
+      else props.dispatcher
+    actorOf(props, context.stageName, dispatcher)
+  }
 
   private[akka] def actorOf(props: Props, name: String, dispatcher: String): ActorRef = supervisor match {
     case ref: LocalActorRef ⇒

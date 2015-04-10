@@ -11,14 +11,15 @@ import akka.stream.{ Inlet, Shape, SinkShape }
 import org.reactivestreams.{ Publisher, Subscriber, Subscription }
 import scala.annotation.unchecked.uncheckedVariance
 import scala.concurrent.{ Future, Promise }
-import akka.stream.impl.ActorFlowMaterializerImpl.CreateContext
+import akka.stream.MaterializationContext
+import akka.stream.ActorFlowMaterializer
 
 /**
  * INTERNAL API
  */
 private[akka] abstract class SinkModule[-In, Mat](val shape: SinkShape[In]) extends Module {
 
-  def create(context: CreateContext): (Subscriber[In] @uncheckedVariance, Mat)
+  def create(context: MaterializationContext): (Subscriber[In] @uncheckedVariance, Mat)
 
   override def replaceShape(s: Shape): Module =
     if (s == shape) this
@@ -54,7 +55,7 @@ private[akka] class PublisherSink[In](val attributes: OperationAttributes, shape
 
   override def toString: String = "PublisherSink"
 
-  override def create(context: CreateContext): (Subscriber[In], Publisher[In]) = {
+  override def create(context: MaterializationContext): (Subscriber[In], Publisher[In]) = {
     val pub = new VirtualPublisher[In]
     val sub = new VirtualSubscriber[In](pub)
     (sub, pub)
@@ -74,8 +75,8 @@ private[akka] final class FanoutPublisherSink[In](
   shape: SinkShape[In])
   extends SinkModule[In, Publisher[In]](shape) {
 
-  override def create(context: CreateContext): (Subscriber[In], Publisher[In]) = {
-    val fanoutActor = context.actorOf(
+  override def create(context: MaterializationContext): (Subscriber[In], Publisher[In]) = {
+    val fanoutActor = context.materializer.asInstanceOf[ActorFlowMaterializer].actorOf(context,
       Props(new FanoutProcessorImpl(context.effectiveSettings, initialBufferSize, maximumBufferSize)))
     val fanoutProcessor = ActorProcessorFactory[In, In](fanoutActor)
     (fanoutProcessor, fanoutProcessor)
@@ -126,7 +127,7 @@ private[akka] object HeadSink {
  */
 private[akka] class HeadSink[In](val attributes: OperationAttributes, shape: SinkShape[In]) extends SinkModule[In, Future[In]](shape) {
 
-  override def create(context: CreateContext) = {
+  override def create(context: MaterializationContext) = {
     val p = Promise[In]()
     val sub = new HeadSink.HeadSinkSubscriber[In](p)
     (sub, p.future)
@@ -145,7 +146,7 @@ private[akka] class HeadSink[In](val attributes: OperationAttributes, shape: Sin
  */
 private[akka] final class BlackholeSink(val attributes: OperationAttributes, shape: SinkShape[Any]) extends SinkModule[Any, Unit](shape) {
 
-  override def create(context: CreateContext) =
+  override def create(context: MaterializationContext) =
     (new BlackholeSubscriber[Any](context.effectiveSettings.maxInputBufferSize), ())
 
   override protected def newInstance(shape: SinkShape[Any]): SinkModule[Any, Unit] = new BlackholeSink(attributes, shape)
@@ -158,7 +159,7 @@ private[akka] final class BlackholeSink(val attributes: OperationAttributes, sha
  */
 private[akka] final class SubscriberSink[In](subscriber: Subscriber[In], val attributes: OperationAttributes, shape: SinkShape[In]) extends SinkModule[In, Unit](shape) {
 
-  override def create(context: CreateContext) = (subscriber, ())
+  override def create(context: MaterializationContext) = (subscriber, ())
 
   override protected def newInstance(shape: SinkShape[In]): SinkModule[In, Unit] = new SubscriberSink[In](subscriber, attributes, shape)
   override def withAttributes(attr: OperationAttributes): Module = new SubscriberSink[In](subscriber, attr, amendShape(attr))
@@ -170,7 +171,7 @@ private[akka] final class SubscriberSink[In](subscriber: Subscriber[In], val att
  */
 private[akka] final class CancelSink(val attributes: OperationAttributes, shape: SinkShape[Any]) extends SinkModule[Any, Unit](shape) {
 
-  override def create(context: CreateContext): (Subscriber[Any], Unit) = {
+  override def create(context: MaterializationContext): (Subscriber[Any], Unit) = {
     val subscriber = new Subscriber[Any] {
       override def onError(t: Throwable): Unit = ()
       override def onSubscribe(s: Subscription): Unit = s.cancel()
@@ -191,8 +192,8 @@ private[akka] final class CancelSink(val attributes: OperationAttributes, shape:
  */
 private[akka] final class ActorSubscriberSink[In](props: Props, val attributes: OperationAttributes, shape: SinkShape[In]) extends SinkModule[In, ActorRef](shape) {
 
-  override def create(context: CreateContext) = {
-    val subscriberRef = context.actorOf(props)
+  override def create(context: MaterializationContext) = {
+    val subscriberRef = context.materializer.asInstanceOf[ActorFlowMaterializer].actorOf(context, props)
     (akka.stream.actor.ActorSubscriber[In](subscriberRef), subscriberRef)
   }
 
@@ -207,8 +208,8 @@ private[akka] final class ActorRefSink[In](ref: ActorRef, onCompleteMessage: Any
                                            val attributes: OperationAttributes,
                                            shape: SinkShape[In]) extends SinkModule[In, Unit](shape) {
 
-  override def create(context: CreateContext) = {
-    val subscriberRef = context.actorOf(
+  override def create(context: MaterializationContext) = {
+    val subscriberRef = context.materializer.asInstanceOf[ActorFlowMaterializer].actorOf(context,
       ActorRefSinkActor.props(ref, context.effectiveSettings.maxInputBufferSize, onCompleteMessage))
     (akka.stream.actor.ActorSubscriber[In](subscriberRef), ())
   }

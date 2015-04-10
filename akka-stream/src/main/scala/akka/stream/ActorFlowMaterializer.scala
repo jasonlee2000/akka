@@ -134,6 +134,11 @@ abstract class ActorFlowMaterializer extends FlowMaterializer {
 
   def settings: ActorFlowMaterializerSettings
 
+  /**
+   * INTERNAL API: this might become public later
+   */
+  private[akka] def actorOf(context: MaterializationContext, props: Props): ActorRef
+
 }
 
 /**
