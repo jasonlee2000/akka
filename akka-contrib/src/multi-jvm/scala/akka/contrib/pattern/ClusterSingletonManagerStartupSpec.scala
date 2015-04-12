@@ -26,6 +26,7 @@ import akka.testkit._
 import akka.testkit.TestEvent._
 import akka.actor.Terminated
 import akka.actor.ActorSelection
+import akka.cluster.MemberStatus
 
 object ClusterSingletonManagerStartupSpec extends MultiNodeConfig {
   val first = role("first")
@@ -90,12 +91,20 @@ class ClusterSingletonManagerStartupSpec extends MultiNodeSpec(ClusterSingletonM
       join(second, first)
       join(third, first)
 
-      runOn(first) {
-        echoProxy ! "hello"
-        expectMsgType[ActorRef](10.seconds)
+      within(7.seconds) {
+        awaitAssert {
+          val members = Cluster(system).state.members
+          members.size should be(3)
+          members.forall(_.status == MemberStatus.Up) should be(true)
+        }
       }
+      enterBarrier("all-up")
 
-      enterBarrier("first-verified")
+      // the singleton instance is expected to start "instantly"
+      echoProxy ! "hello"
+      expectMsgType[ActorRef](3.seconds)
+
+      enterBarrier("done")
     }
 
   }
