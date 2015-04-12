@@ -118,10 +118,12 @@ class ClusterSingletonManagerLeaveSpec extends MultiNodeSpec(ClusterSingletonMan
 
       runOn(second, third) {
         val p = TestProbe()
+        val firstAddress = node(first).address
         p.within(10.seconds) {
           p.awaitAssert {
             echoProxy.tell("hello2", p.ref)
-            p.expectMsgType[ActorRef](1.seconds)
+            p.expectMsgType[ActorRef](1.seconds).path.address should not be (firstAddress)
+
           }
         }
       }
