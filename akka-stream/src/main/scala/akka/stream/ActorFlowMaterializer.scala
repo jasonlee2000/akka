@@ -14,6 +14,7 @@ import akka.actor.Props
 import akka.actor.ActorRef
 import akka.stream.javadsl.japi
 import scala.concurrent.ExecutionContextExecutor
+import akka.stream.scaladsl.OperationAttributes
 
 object ActorFlowMaterializer {
 
@@ -121,6 +122,16 @@ object ActorFlowMaterializer {
     system
   }
 
+  /**
+   * INTERNAL API
+   */
+  private[akka] def downcast(materializer: FlowMaterializer): ActorFlowMaterializer =
+    materializer match {
+      case m: ActorFlowMaterializer ⇒ m
+      case _ ⇒ throw new IllegalArgumentException(s"required [$classOf[ActorFlowMaterializer.getName]" +
+        s"but got [${materializer.getClass.getName}]")
+    }
+
 }
 
 /**
@@ -133,6 +144,8 @@ object ActorFlowMaterializer {
 abstract class ActorFlowMaterializer extends FlowMaterializer {
 
   def settings: ActorFlowMaterializerSettings
+
+  def effectiveSettings(opAttr: OperationAttributes): ActorFlowMaterializerSettings
 
   /**
    * INTERNAL API: this might become public later

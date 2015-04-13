@@ -22,23 +22,6 @@ import scala.concurrent.{ Await, ExecutionContextExecutor }
 /**
  * INTERNAL API
  */
-private[akka] object ActorFlowMaterializerImpl {
-
-  def calcSettings(opAttr: OperationAttributes)(settings: ActorFlowMaterializerSettings): ActorFlowMaterializerSettings = {
-    import OperationAttributes._
-    opAttr.attributes.collect {
-      case InputBuffer(initial, max) ⇒ (s: ActorFlowMaterializerSettings) ⇒ s.withInputBuffer(initial, max)
-      case Dispatcher(dispatcher) ⇒ (s: ActorFlowMaterializerSettings) ⇒ s.withDispatcher(dispatcher)
-      case SupervisionStrategy(decider) ⇒ (s: ActorFlowMaterializerSettings) ⇒
-        s.withSupervisionStrategy(decider)
-    }.reduceOption(_ andThen _).getOrElse((x: ActorFlowMaterializerSettings) ⇒ x)(settings) // FIXME is this the optimal way of encoding this?
-  }
-
-}
-
-/**
- * INTERNAL API
- */
 private[akka] case class ActorFlowMaterializerImpl(override val settings: ActorFlowMaterializerSettings,
                                                    dispatchers: Dispatchers,
                                                    supervisor: ActorRef,
@@ -55,6 +38,16 @@ private[akka] case class ActorFlowMaterializerImpl(override val settings: ActorF
 
   private[this] def createFlowName(): String = s"$namePrefix-${nextFlowNameCount()}"
 
+  override def effectiveSettings(opAttr: OperationAttributes): ActorFlowMaterializerSettings = {
+    import OperationAttributes._
+    opAttr.attributes.collect {
+      case InputBuffer(initial, max) ⇒ (s: ActorFlowMaterializerSettings) ⇒ s.withInputBuffer(initial, max)
+      case Dispatcher(dispatcher) ⇒ (s: ActorFlowMaterializerSettings) ⇒ s.withDispatcher(dispatcher)
+      case SupervisionStrategy(decider) ⇒ (s: ActorFlowMaterializerSettings) ⇒
+        s.withSupervisionStrategy(decider)
+    }.reduceOption(_ andThen _).getOrElse((x: ActorFlowMaterializerSettings) ⇒ x)(settings) // FIXME is this the optimal way of encoding this?
+  }
+
   override def materialize[Mat](runnableFlow: Graph[ClosedShape, Mat]): Mat = {
     runnableFlow.module.validate()
 
@@ -70,8 +63,7 @@ private[akka] case class ActorFlowMaterializerImpl(override val settings: ActorF
       override protected def materializeAtomic(atomic: Module, effectiveAttributes: OperationAttributes): Any = {
 
         def newMaterializationContext() = new MaterializationContext(ActorFlowMaterializerImpl.this,
-          effectiveAttributes, calcSettings(effectiveAttributes)(settings),
-          stageName(effectiveAttributes))
+          effectiveAttributes, stageName(effectiveAttributes))
 
         atomic match {
           case sink: SinkModule[_, _] ⇒
@@ -84,12 +76,12 @@ private[akka] case class ActorFlowMaterializerImpl(override val settings: ActorF
             mat
 
           case stage: StageModule ⇒
-            val (processor, mat) = processorFor(stage, effectiveAttributes, calcSettings(effectiveAttributes)(settings))
+            val (processor, mat) = processorFor(stage, effectiveAttributes, effectiveSettings(effectiveAttributes))
             assignPort(stage.inPort, processor)
             assignPort(stage.outPort, processor)
             mat
 
-          case junction: JunctionModule ⇒ materializeJunction(junction, effectiveAttributes, calcSettings(effectiveAttributes)(settings))
+          case junction: JunctionModule ⇒ materializeJunction(junction, effectiveAttributes, effectiveSettings(effectiveAttributes))
         }
       }
 
@@ -183,7 +175,7 @@ private[akka] case class ActorFlowMaterializerImpl(override val settings: ActorF
 
   override def actorOf(context: MaterializationContext, props: Props): ActorRef = {
     val dispatcher =
-      if (props.deploy.dispatcher == Deploy.NoDispatcherGiven) context.effectiveSettings.dispatcher
+      if (props.deploy.dispatcher == Deploy.NoDispatcherGiven) effectiveSettings(context.effectiveAttributes).dispatcher
       else props.dispatcher
     actorOf(props, context.stageName, dispatcher)
   }
@@ -251,11 +243,11 @@ private[akka] object ActorProcessorFactory {
 
   private val _identity = (x: Any) ⇒ x
 
-  def props(materializer: ActorFlowMaterializerImpl, op: StageModule, parentAttributes: OperationAttributes): (Props, Any) = {
+  def props(materializer: ActorFlowMaterializer, op: StageModule, parentAttributes: OperationAttributes): (Props, Any) = {
     val att = parentAttributes and op.attributes
     // USE THIS TO AVOID CLOSING OVER THE MATERIALIZER BELOW
     // Also, otherwise the attributes will not affect the settings properly!
-    val settings = calcSettings(att)(materializer.settings)
+    val settings = materializer.effectiveSettings(att)
     op match {
       case Identity(_)                ⇒ (ActorInterpreter.props(settings, List(fusing.Map(_identity, settings.supervisionDecider)), materializer), ())
       case Fused(ops, _)              ⇒ (ActorInterpreter.props(settings, ops, materializer), ())
